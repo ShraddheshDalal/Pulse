@@ -72,42 +72,6 @@ $$\mathbf{MAXIMIZE\ SAFE\ REALIZED\ REVENUE}$$
 
 ---
 
-## ✨ Buildathon Hero Demonstrations
-
-### 1. Recovery Simulator & "What If I Do Nothing?" (Hero 1)
-* **Scenario**: Payment `#PAY48291` (₹7,499) fails due to card issuer decline for customer Rahul Sharma.
-* **Pulse Simulation**:
-  - Immediate Card Retry: 31% probability → ₹2,325 expected recovery
-  - **Offer UPI Alternative**: **78% probability → ₹5,847 expected recovery** (*Pulse Recommends*)
-  - WhatsApp Payment Link: 62% probability → ₹4,649 expected recovery
-  - Delayed Retry (45m): 44% probability → ₹3,299 expected recovery
-* **Counterfactual Analysis**: Without Pulse, customer natural return rate is only 19% (₹6,074 permanently lost). Pulse recovers **+₹5,847** safe incremental revenue.
-
-### 2. Risk-Aware Recovery: High Recovery $\neq$ Safe Recovery (Hero 2)
-* **Scenario**: Payment `#PAY48292` (₹85,000) from an unrecognized device with high velocity.
-* **Outcome**: Risk Score: **94% (Critical)**, Recovery Potential: 90%.
-* **Pulse Decision**: **BLOCK RECOVERY**.
-* **Rationale**: *"High recovery probability does not mean safe recovery. Risk score exceeds merchant safety threshold (30%). Blocking prevents guaranteed chargeback liability."*
-
-### 3. AI Reconciliation Investigation (Hero 3)
-* **Scenario**: Expected settlement of ₹9,112 vs actual bank credit of ₹8,712 (**₹400 variance**).
-* **AI Root-Cause Audit**: Clicking **[Investigate]** executes an automated 5-step ledger trace:
-  - ✓ Payment Captured: ₹9,500
-  - ✓ Processor MDR Fee (2.0%): ₹190
-  - ✓ GST on MDR (18%): ₹34
-  - ✓ Customer Refunds: ₹0
-  - ⚠ **Processor Adjustment Detected: ₹400**
-  - **Result**: Identifies adjustment with **92% confidence** and generates resolution recommendation.
-
-### 4. Trilingual Voice Operations Autopilot (Hero 4)
-* **Voice Engine**: Operates the exact same backend intelligence through browser-native Web Speech API in **English, Hindi (हिंदी), and Marathi (मराठी)**.
-* **Dual-Authorization Protocol**: Queries answer immediately. Actions that execute financial recovery require confirmation (*"You are about to initiate recovery for ₹7,499. Confirm?"*).
-
-### 5. Revenue Leakage Map & Counterfactual Uplift (Hero 5)
-* **Leakage Breakdown**: Identifies where ₹4.82L store revenue is leaking (Temporary Failures, Cart Abandonment, Risk Holds, Permanent Declines).
-* **Modeled AI Uplift**: Models **+₹1.31L additional recovery** attributed directly to Pulse routing algorithms vs baseline.
-
----
 
 ## 📁 Repository Structure
 
