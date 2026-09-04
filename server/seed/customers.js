@@ -36,19 +36,47 @@ function generateCustomers(count, merchantId) {
     const failed = totalTx - successful;
     const avgOrder = pick(rng, [299, 499, 999, 1499, 2999, 4999, 7499, 12999]);
 
+    let name = `${firstName} ${lastName}`;
+    let email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}${i}@email.com`;
+    let phone = `+91${9000000000 + randomInt(rng, 100000, 999999999)}`;
+    let preferredMethod = pick(rng, METHODS);
+    let successfulTransactions = successful;
+    let failedTransactions = failed;
+    let totalTransactions = totalTx;
+
+    if (i === 1) {
+      name = 'Rahul Sharma';
+      email = 'rahul.sharma@email.com';
+      phone = '+919876543001';
+      preferredMethod = 'upi';
+      successfulTransactions = 12;
+      failedTransactions = 2;
+      totalTransactions = 14;
+    } else if (i === 15) {
+      name = 'Sneha Patel';
+      email = 'sneha.patel@email.com';
+      phone = '+919876543015';
+      preferredMethod = 'upi';
+    } else if (i === 42) {
+      name = 'Unknown Buyer';
+      email = 'buyer42@email.com';
+      phone = '+919800000042';
+      preferredMethod = 'card';
+    }
+
     customers.push({
       customerId: generateId('CUST', i),
       merchantId,
-      name: `${firstName} ${lastName}`,
-      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}${i}@email.com`,
-      phone: `+91${9000000000 + randomInt(rng, 100000, 999999999)}`,
-      totalTransactions: totalTx,
-      successfulTransactions: successful,
-      failedTransactions: failed,
-      totalSpend: successful * avgOrder,
+      name,
+      email,
+      phone,
+      totalTransactions,
+      successfulTransactions,
+      failedTransactions,
+      totalSpend: successfulTransactions * avgOrder,
       averageOrderValue: avgOrder,
-      preferredMethod: pick(rng, METHODS),
-      riskHistory: Math.floor(rng() * 15),
+      preferredMethod,
+      riskHistory: i === 42 ? 85 : Math.floor(rng() * 15),
       deviceFingerprints: [generateId('DEV', randomInt(rng, 1, 2000))],
       firstTransactionAt: new Date(Date.now() - randomInt(rng, 30, 365) * 86400000),
       lastTransactionAt: new Date(Date.now() - randomInt(rng, 0, 14) * 86400000),

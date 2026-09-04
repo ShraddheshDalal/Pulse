@@ -16,7 +16,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 const apiClient = axios.create({
   baseURL: API_BASE,
-  timeout: 3500,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -558,34 +558,55 @@ export const api = {
       let response = '';
       let requiresConfirmation = false;
 
-      if (lower.includes('fail') || lower.includes('फेल') || lower.includes('झाले')) {
+      if (lower.includes('upi')) {
+        intent = 'GET_WHY_UPI';
+        response = language === 'hi'
+          ? 'Pulse ने UPI इसलिए चुना क्योंकि ग्राहक के पास 8 सफल UPI भुगतानों का इतिहास है, और कार्ड declines UPI के ज़रिए 2.4 गुना बेहतर (76%) recover होते हैं।'
+          : language === 'mr'
+          ? 'Pulse ने UPI निवडले कारण ग्राहकाकडे यापूर्वी 8 यशस्वी UPI पेमेंटचा इतिहास आहे, आणि कार्ड decline नंतर UPI द्वारे 2.4 पट जास्त (76%) यश मिळते.'
+          : 'Pulse chose UPI because Rahul Sharma has 8 historical successful UPI payments, risk is low (4%), and similar card declines recover 76% via UPI (2.4x higher than card retry).';
+      } else if (lower.includes('why') && (lower.includes('fail') || lower.includes('pay48291'))) {
+        intent = 'GET_PAYMENT_EXPLANATION';
+        response = language === 'hi'
+          ? 'Payment #PAY48291 अस्थायी card issuer decline के कारण असफल हुआ। ग्राहक का सत्र अभी सक्रिय है और धोखाधड़ी जोखिम केवल 4% है।'
+          : language === 'mr'
+          ? 'Payment #PAY48291 तात्पुरत्या card issuer decline मुळे अयशस्वी झाला. ग्राहक अजूनही सक्रिय आहे आणि जोखीम फक्त 4% आहे.'
+          : 'Payment #PAY48291 failed due to a temporary card issuer decline. The customer session is still active and fraud risk is low at 4%.';
+      } else if (lower.includes('risk') || lower.includes('जोखिम') || lower.includes('जोखीम')) {
+        intent = 'GET_RISK_INFO';
+        response = language === 'hi'
+          ? 'Payment #PAY48292 (₹85,000) का risk score 94% है—नया उपकरण, velocity anomaly और असामान्य राशि। सुरक्षा सीमा 30% से अधिक होने के कारण Pulse ने recovery रोक दी है। High recovery का मतलब safe recovery नहीं होता।'
+          : language === 'mr'
+          ? 'Payment #PAY48292 (₹85,000) चा risk score 94% आहे—अनोळखी डिव्हाइस आणि velocity anomaly। 30% सेफ्टी थ्रेशोल्डपेक्षा जास्त असल्याने Pulse ने रिकव्हरी रोखली आहे. High recovery म्हणजे safe recovery नाही.'
+          : 'Payment #PAY48292 (₹85,000) has a 94% risk score due to an unrecognized device and velocity anomalies. It exceeds the merchant\'s 30% safety threshold, so recovery is blocked. High recovery probability does not mean safe recovery.';
+      } else if (lower.includes('fail') || lower.includes('फेल') || lower.includes('झाले')) {
         intent = 'GET_FAILED_PAYMENTS';
         response = language === 'hi'
-          ? 'आज 23 payments fail हुए हैं। इनमें से 17 low-risk हैं और लगभग ₹42,800 recover किए जा सकते हैं।'
+          ? 'आज कुल 500 payments fail हुए हैं। इनमें से 300 low-risk हैं और लगभग ₹2.66 लाख सुरक्षित रूप से recover किए जा सकते हैं।'
           : language === 'mr'
-          ? 'आज 23 payments fail झाले आहेत. त्यापैकी 17 low-risk आहेत आणि सुमारे ₹42,800 recover होऊ शकतात.'
-          : '23 payments failed today. 17 are low-risk and approximately ₹42,800 can safely be recovered.';
+          ? 'आज एकूण 500 payments fail झाले आहेत. त्यापैकी 300 low-risk आहेत आणि सुमारे ₹2.66 लाख सुरक्षितपणे recover होऊ शकतात.'
+          : '500 payments failed today. 300 are low-risk and approximately ₹2.66 lakh can safely be recovered.';
       } else if (lower.includes('first') || lower.includes('पहल') || lower.includes('आधी')) {
         intent = 'GET_ATTENTION_FIRST';
         response = language === 'hi'
-          ? '₹14,000 का payment सबसे पहले recover करने की शिफारस है। इसका risk 8% है और recovery probability 84% है। UPI सबसे अच्छा option है।'
+          ? 'सबसे पहले ₹7,499 का payment (#PAY48291) recover करना चाहिए। इसका risk केवल 4% है, recovery probability 81% है, और UPI सर्वोत्तम विकल्प है।'
           : language === 'mr'
-          ? '₹14,000 चा payment सर्वात आधी recover करण्याची शिफारस आहे. त्याचा risk 8% आहे आणि recovery probability 84% आहे. UPI हा सर्वोत्तम पर्याय आहे.'
-          : 'The highest priority is a ₹14,000 payment with 84% recovery probability and 8% risk. UPI is the optimal route.';
+          ? 'सर्वात आधी ₹7,499 चा payment (#PAY48291) recover करायचा आहे. त्याचा risk फक्त 4% आहे, recovery probability 81% आहे, आणि UPI हा सर्वोत्तम पर्याय आहे.'
+          : 'Payment #PAY48291 for ₹7,499 should be handled first. It has an 81% recovery probability, only 4% risk, and Pulse recommends offering UPI.';
       } else if (lower.includes('recover') || lower.includes('proceed') || lower.includes('कर') || lower.includes('करा')) {
         intent = 'EXECUTE_RECOVERY';
         requiresConfirmation = true;
         response = language === 'hi'
-          ? '₹7,499 payment का risk score 4% है और recovery probability 81% है। Pulse UPI recovery recommend करता है। Proceed करूं?'
+          ? '₹7,499 payment (#PAY48291) का risk score 4% है और recovery probability 81% है। Pulse UPI recovery recommend करता है। Proceed करूं?'
           : language === 'mr'
-          ? '₹7,499 payment साठी UPI recovery execute करण्यापूर्वी तुमची confirmation आवश्यक आहे. Proceed करू?'
-          : '₹7,499 payment has a 4% risk score and 81% recovery probability. Pulse recommends switching to UPI. Shall I proceed?';
+          ? '₹7,499 payment (#PAY48291) साठी UPI recovery execute करण्यापूर्वी तुमची confirmation आवश्यक आहे. Proceed करू?'
+          : 'Payment #PAY48291 (₹7,499) has a 4% risk score and 81% recovery probability. Pulse recommends switching to UPI. Shall I proceed?';
       } else {
         response = language === 'hi'
-          ? '₹1.4 लाख revenue risk पर है। ₹84,200 potentially recoverable है।'
+          ? '₹1.40 लाख राजस्व जोखिम में है। Pulse के माध्यम से लगभग ₹2.66 लाख सुरक्षित रूप से recover किया जा सकता है।'
           : language === 'mr'
-          ? '₹1.4 लाख revenue risk वर आहे. ₹84,200 recover होऊ शकतात.'
-          : '₹1.4 lakh is currently at risk. ₹84,200 is potentially recoverable.';
+          ? '₹1.40 लाख महसूल धोक्यात आहे. Pulse द्वारे सुमारे ₹2.66 लाख सुरक्षितपणे recover होऊ शकतात.'
+          : '₹1.40 lakh is currently at risk. Approximately ₹2.66 lakh is potentially recoverable through Pulse automated interventions.';
       }
 
       return {

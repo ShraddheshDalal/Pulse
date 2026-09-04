@@ -1,6 +1,6 @@
 function generateMerchant() {
   return {
-    merchantId: 'MERCH00001',
+    merchantId: 'MERCHANT_TRENDCART_001',
     name: 'Vikram Mehta',
     businessName: 'TrendCart India',
     businessType: 'ecommerce',

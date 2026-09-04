@@ -4,173 +4,6 @@ const {
 } = require('./helpers');
 const { METHODS, METHOD_WEIGHTS, DEVICES } = require('./customers');
 
-const AMOUNTS = [299, 499, 999, 1499, 2999, 4999, 7499, 12999, 25000, 50000, 85000, 100000];
-const AMOUNT_WEIGHTS = [15, 20, 18, 14, 12, 8, 5, 4, 2, 1, 0.5, 0.5];
-
-const FAILURE_REASONS = [
-  'insufficient_funds', 'bank_decline', 'network_timeout',
-  'issuer_decline', 'limit_exceeded', 'expired_card',
-  'technical_error', 'user_cancelled'
-];
-const FAILURE_WEIGHTS = [20, 18, 15, 15, 8, 7, 10, 7];
-
-const RISK_SIGNALS = [
-  { signal: 'new_customer', weight: 15, description: 'First-time customer with no transaction history', severity: 'medium' },
-  { signal: 'new_device', weight: 12, description: 'Payment from an unrecognized device', severity: 'medium' },
-  { signal: 'amount_anomaly', weight: 20, description: 'Transaction amount significantly higher than average', severity: 'high' },
-  { signal: 'velocity_anomaly', weight: 18, description: 'Multiple rapid payment attempts detected', severity: 'high' },
-  { signal: 'unusual_behavior', weight: 10, description: 'Unusual browsing or checkout behavior pattern', severity: 'medium' },
-  { signal: 'repeated_failures', weight: 14, description: 'Multiple consecutive failed payment attempts', severity: 'high' },
-  { signal: 'method_anomaly', weight: 8, description: 'Payment method different from customer preference', severity: 'low' },
-  { signal: 'historical_deviation', weight: 10, description: 'Transaction deviates from historical pattern', severity: 'medium' },
-  { signal: 'high_value', weight: 16, description: 'High-value transaction requiring additional scrutiny', severity: 'high' },
-];
-
-function computeRiskScore(rng, payment, customer) {
-  let score = 0;
-  const signals = [];
-
-  // New customer: higher risk
-  if (customer.totalTransactions <= 2) {
-    const w = 12 + rng() * 8;
-    score += w;
-    signals.push({ ...RISK_SIGNALS[0], weight: Math.round(w) });
-  }
-
-  // Amount anomaly: if amount >> average
-  if (payment.amount > customer.averageOrderValue * 3) {
-    const w = 15 + rng() * 10;
-    score += w;
-    signals.push({ ...RISK_SIGNALS[2], weight: Math.round(w) });
-  }
-
-  // High value
-  if (payment.amount >= 50000) {
-    const w = 10 + rng() * 12;
-    score += w;
-    signals.push({ ...RISK_SIGNALS[8], weight: Math.round(w) });
-  }
-
-  // New device
-  if (rng() < 0.15) {
-    const w = 8 + rng() * 8;
-    score += w;
-    signals.push({ ...RISK_SIGNALS[1], weight: Math.round(w) });
-  }
-
-  // Velocity anomaly
-  if (rng() < 0.08) {
-    const w = 12 + rng() * 10;
-    score += w;
-    signals.push({ ...RISK_SIGNALS[3], weight: Math.round(w) });
-  }
-
-  // Repeated failures
-  if (customer.failedTransactions > 5) {
-    const w = 8 + rng() * 8;
-    score += w;
-    signals.push({ ...RISK_SIGNALS[5], weight: Math.round(w) });
-  }
-
-  // Method anomaly
-  if (payment.method !== customer.preferredMethod && rng() < 0.3) {
-    const w = 4 + rng() * 6;
-    score += w;
-    signals.push({ ...RISK_SIGNALS[6], weight: Math.round(w) });
-  }
-
-  return { score: Math.min(100, Math.round(score)), signals };
-}
-
-function computeRecoveryProbability(rng, payment, customer, riskScore) {
-  if (!payment.failureReason) return 0;
-
-  let base = 50;
-
-  // Method-specific base probabilities
-  const methodRecovery = { upi: 76, card: 45, netbanking: 52, wallet: 60 };
-  base = methodRecovery[payment.method] || 50;
-
-  // Adjust by failure reason
-  const reasonAdjust = {
-    insufficient_funds: -15,
-    bank_decline: -5,
-    network_timeout: 10,
-    issuer_decline: 5,
-    limit_exceeded: -20,
-    expired_card: -25,
-    technical_error: 15,
-    user_cancelled: -10,
-  };
-  base += (reasonAdjust[payment.failureReason] || 0);
-
-  // Customer intent boost
-  if (customer.successfulTransactions > 5) base += 8;
-  if (customer.totalSpend > 20000) base += 5;
-
-  // Risk penalty
-  base -= riskScore * 0.3;
-
-  // Add some deterministic noise
-  base += (rng() - 0.5) * 10;
-
-  return Math.max(5, Math.min(95, Math.round(base)));
-}
-
-function computeCustomerIntent(rng, customer, payment) {
-  let intent = 50;
-  if (customer.successfulTransactions > 3) intent += 15;
-  if (customer.totalSpend > 10000) intent += 10;
-  if (payment.failureReason === 'user_cancelled') intent -= 25;
-  if (payment.failureReason === 'network_timeout') intent += 10;
-  if (payment.failureReason === 'issuer_decline') intent += 5;
-  intent += (rng() - 0.5) * 20;
-  return Math.max(10, Math.min(99, Math.round(intent)));
-}
-
-function computeHealthScore(riskScore, recoveryProb, customerIntent, legitimacy, settlementConf) {
-  return Math.round(
-    legitimacy * 0.25 +
-    customerIntent * 0.2 +
-    recoveryProb * 0.2 +
-    settlementConf * 0.15 +
-    (100 - riskScore) * 0.2
-  );
-}
-
-function getRecommendedAction(rng, payment, riskScore, recoveryProb) {
-  if (riskScore > 75) return 'block';
-  if (riskScore > 50) return 'manual_review';
-  if (recoveryProb < 30) return 'retry_later';
-
-  // Pick best action based on method and failure
-  if (payment.method === 'card') {
-    if (payment.failureReason === 'issuer_decline' || payment.failureReason === 'network_timeout') {
-      return 'offer_upi';
-    }
-    if (payment.failureReason === 'expired_card') return 'send_payment_link';
-    return rng() < 0.6 ? 'offer_upi' : 'send_payment_link';
-  }
-  if (payment.method === 'upi') {
-    if (payment.failureReason === 'network_timeout') return 'retry_same_method';
-    return rng() < 0.5 ? 'retry_same_method' : 'send_payment_link';
-  }
-  if (payment.method === 'netbanking') return 'offer_upi';
-  return 'send_payment_link';
-}
-
-function determineAttentionCategory(status, riskScore, recoveryProb, amount) {
-  if (status === 'captured' || status === 'settled' || status === 'reconciled') return 'resolved';
-  if (status === 'recovered') return 'resolved';
-  if (riskScore > 75) return 'act_now';
-  if (status === 'failed' && recoveryProb > 60 && amount > 5000) return 'act_now';
-  if (status === 'failed' && recoveryProb > 40) return 'review';
-  if (status === 'at_risk' || status === 'review_required') return 'review';
-  if (status === 'recovery_in_progress') return 'monitor';
-  if (status === 'failed') return 'monitor';
-  return null;
-}
-
 function generatePaymentsAndRelated(customers, merchantId) {
   const rng = createRng(12345);
   const payments = [];
@@ -187,104 +20,295 @@ function generatePaymentsAndRelated(customers, merchantId) {
   let reconciliationCounter = 1;
   let auditCounter = 1;
 
-  // Generate 2000 payments
-  for (let i = 1; i <= 2000; i++) {
-    const customer = customers[Math.floor(rng() * customers.length)];
-    const amount = pickWeighted(rng, AMOUNTS, AMOUNT_WEIGHTS);
-    const method = pickWeighted(rng, METHODS, METHOD_WEIGHTS);
-    const createdAt = generateDate(rng, 30);
+  // Exact target financial figures:
+  // GMV = 48,20,000 (₹48.20L)
+  // Captured volume (captured + settled + reconciled + recovered) = 43,70,000 (₹43.70L)
+  // Recovered by Pulse = 2,14,000 (₹2.14L)
+  // Potentially Recoverable = 2,66,000 (₹2.66L)
+  // Revenue at Risk = 1,40,000 (₹1.40L)
+  // Failed count = 500 (300 recoverable, 100 high-risk, 100 abandoned)
+  // Total payments = 2,000
+
+  // 1. Recoverable Failed Payments (300 items, including PAY48291)
+  // Target sum of amounts: 295,000
+  // Target sum of Math.round(amount * prob / 100): 266,000
+  // PAY48291: amt = 7499, prob = 81 -> exp = Math.round(7499 * 0.81) = 6074
+  // Remaining 299: amt sum = 287501, exp sum = 259926
+  const recoverableSpecs = [];
+  // PAY48291 at index 0
+  recoverableSpecs.push({
+    paymentId: 'PAY48291',
+    amount: 7499,
+    recoveryProb: 81,
+    riskScore: 4,
+    failureReason: 'issuer_decline',
+    method: 'card',
+    recommendedAction: 'offer_upi',
+    isHero1: true,
+  });
+
+  let recAmtRem = 287501;
+  let recExpRem = 259926;
+  const baseAmts = [499, 799, 999, 1299, 1499, 1999, 2499];
+
+  for (let i = 1; i < 300; i++) {
+    const isLast = i === 299;
+    let amt;
+    let prob;
+
+    if (isLast) {
+      amt = recAmtRem;
+      prob = Math.max(50, Math.min(95, Math.round((recExpRem / amt) * 100)));
+    } else {
+      const avgLeft = Math.floor(recAmtRem / (300 - i));
+      amt = pick(rng, baseAmts);
+      if (amt > recAmtRem - (300 - i - 1) * 300) amt = avgLeft;
+      if (amt < 300) amt = 300;
+      const targetRatio = recAmtRem > 0 ? (recExpRem / recAmtRem) : 0.90;
+      prob = Math.max(72, Math.min(95, Math.round(targetRatio * 100) + randomInt(rng, -2, 2)));
+    }
+
+    const exp = Math.round(amt * prob / 100);
+    recAmtRem -= amt;
+    recExpRem -= exp;
+
+    recoverableSpecs.push({
+      amount: amt,
+      recoveryProb: prob,
+      riskScore: randomInt(rng, 4, 18),
+      failureReason: pick(rng, ['issuer_decline', 'network_timeout', 'bank_decline']),
+      method: pickWeighted(rng, METHODS, METHOD_WEIGHTS),
+      recommendedAction: 'offer_upi',
+    });
+  }
+
+  // 2. High-Risk Payments (100 items, including PAY48292 = 85,000)
+  // Target sum of amounts: 140,000 (Revenue at risk)
+  // PAY48292: 85,000
+  // Remaining 99: sum = 55,000
+  const highRiskSpecs = [];
+  highRiskSpecs.push({
+    paymentId: 'PAY48292',
+    amount: 85000,
+    riskScore: 94,
+    recoveryProb: 90,
+    failureReason: 'bank_decline',
+    method: 'card',
+    recommendedAction: 'block',
+    isHero2: true,
+  });
+
+  let hrAmtRem = 55000;
+  for (let i = 1; i < 100; i++) {
+    const isLast = i === 99;
+    const amt = isLast ? hrAmtRem : Math.floor(hrAmtRem / (100 - i)) + randomInt(rng, -30, 30);
+    hrAmtRem -= amt;
+
+    highRiskSpecs.push({
+      amount: amt,
+      riskScore: randomInt(rng, 76, 95),
+      recoveryProb: randomInt(rng, 50, 85),
+      failureReason: pick(rng, ['bank_decline', 'issuer_decline']),
+      method: 'card',
+      recommendedAction: 'block',
+    });
+  }
+
+  // 3. Abandoned Checkouts (100 items)
+  // Target sum of amounts: 15,000
+  const abandonedSpecs = [];
+  let abAmtRem = 15000;
+  for (let i = 0; i < 100; i++) {
+    const isLast = i === 99;
+    const amt = isLast ? abAmtRem : Math.floor(abAmtRem / (100 - i)) + randomInt(rng, -10, 10);
+    abAmtRem -= amt;
+
+    abandonedSpecs.push({
+      amount: amt,
+      riskScore: randomInt(rng, 5, 20),
+      recoveryProb: randomInt(rng, 60, 75),
+      failureReason: 'user_cancelled',
+      method: 'upi',
+      recommendedAction: 'send_payment_link',
+    });
+  }
+
+  // 4. Recovered Payments by Pulse (80 items)
+  // Target sum of amounts: 214,000 (₹2.14L)
+  const recoveredSpecs = [];
+  let recovAmtRem = 214000;
+  for (let i = 0; i < 80; i++) {
+    const isLast = i === 79;
+    let amt;
+    if (isLast) {
+      amt = recovAmtRem;
+    } else {
+      const avg = Math.floor(recovAmtRem / (80 - i));
+      amt = pick(rng, [999, 1499, 1999, 2499, 2999, 3999, 4999]);
+      if (amt > recovAmtRem - (80 - i - 1) * 500) amt = avg;
+    }
+    recovAmtRem -= amt;
+
+    recoveredSpecs.push({
+      amount: amt,
+      riskScore: randomInt(rng, 3, 15),
+      recoveryProb: randomInt(rng, 75, 92),
+      failureReason: pick(rng, ['issuer_decline', 'network_timeout']),
+      method: 'card',
+      recommendedAction: 'offer_upi',
+      actualRecoveryAction: 'offer_upi',
+      status: 'recovered',
+      outcome: 'recovered',
+    });
+  }
+
+  // 5. Captured / Settled / Reconciled Payments (1,420 items)
+  // Target sum of amounts: 43,70,000 - 214,000 = 41,56,000
+  // Index 0 in this group will be PAY48293 (amount: 9500)
+  const capturedSpecs = [];
+  capturedSpecs.push({
+    paymentId: 'PAY48293',
+    amount: 9500,
+    status: 'reconciled',
+    method: 'upi',
+    riskScore: 3,
+    isHero3: true,
+  });
+
+  let capAmtRem = 4156000 - 9500; // 4146500 for 1419 items
+  const capCount = 1419;
+
+  for (let i = 1; i <= capCount; i++) {
+    const isLast = i === capCount;
+    let amt;
+    if (isLast) {
+      amt = capAmtRem;
+    } else {
+      const avg = Math.floor(capAmtRem / (capCount - i + 1));
+      amt = pick(rng, [499, 999, 1499, 1999, 2499, 2999, 3999, 4999, 7499, 9999, 14999]);
+      if (amt > capAmtRem - (capCount - i) * 300) amt = avg;
+    }
+    capAmtRem -= amt;
+
+    const r = rng();
+    let status;
+    if (r < 0.45) status = 'captured';
+    else if (r < 0.80) status = 'settled';
+    else status = 'reconciled';
+
+    capturedSpecs.push({
+      amount: amt,
+      status,
+      method: pickWeighted(rng, METHODS, METHOD_WEIGHTS),
+      riskScore: randomInt(rng, 1, 12),
+    });
+  }
+
+  // Combine into single 2,000 payments list:
+  // 0..299: 300 recoverable failed
+  // 300..399: 100 high-risk
+  // 400..499: 100 abandoned
+  // 500..579: 80 recovered
+  // 580..1999: 1420 captured/settled/reconciled (580 is PAY48293)
+  const allSpecs = [
+    ...recoverableSpecs.map(s => ({ ...s, status: s.status || 'recovery_recommended', category: 'act_now' })),
+    ...highRiskSpecs.map(s => ({ ...s, status: 'blocked', category: 'act_now' })),
+    ...abandonedSpecs.map(s => ({ ...s, status: 'abandoned', category: 'review' })),
+    ...recoveredSpecs.map(s => ({ ...s, category: 'resolved' })),
+    ...capturedSpecs.map(s => ({ ...s, category: 'resolved' })),
+  ];
+
+  // Build the 2000 payment objects
+  for (let i = 0; i < allSpecs.length; i++) {
+    const spec = allSpecs[i];
+    const customer = customers[i % customers.length];
+    const paymentId = spec.paymentId || generateId('PAY', i + 1);
+    const orderId = `ORD${paymentId.replace('PAY', '')}`;
+    const amount = spec.amount;
+    const status = spec.status;
+    const method = spec.method || 'card';
+    const failureReason = spec.failureReason || null;
+    const riskScore = spec.riskScore || 5;
+    const recoveryProb = spec.recoveryProb || 0;
+    const recommendedAction = spec.recommendedAction || null;
+    const actualRecoveryAction = spec.actualRecoveryAction || (status === 'recovered' ? 'offer_upi' : null);
+    const outcome = spec.outcome || (['captured', 'settled', 'reconciled'].includes(status) ? 'captured' : null);
+
+    const createdAt = spec.isHero1 || spec.isHero2 || spec.isHero3
+      ? new Date()
+      : generateDate(rng, 30);
     const device = pick(rng, DEVICES);
 
-    // Determine status distribution: ~75% captured, ~25% failed/other
-    const statusRoll = rng();
-    let status, failureReason = null;
+    const customerIntent = failureReason === 'user_cancelled' ? randomInt(rng, 75, 92) : randomInt(rng, 65, 98);
+    const legitimacy = Math.max(15, 100 - Math.round(riskScore * 0.9));
+    const settlementConf = status === 'blocked' ? 20 : (failureReason ? 45 : 98);
+    const healthScore = Math.round(legitimacy * 0.25 + customerIntent * 0.2 + (recoveryProb || 80) * 0.2 + settlementConf * 0.15 + (100 - riskScore) * 0.2);
 
-    if (statusRoll < 0.63) {
-      status = 'captured';
-    } else if (statusRoll < 0.72) {
-      status = 'settled';
-    } else if (statusRoll < 0.77) {
-      status = 'reconciled';
-    } else if (statusRoll < 0.82) {
-      status = 'failed';
-      failureReason = pickWeighted(rng, FAILURE_REASONS, FAILURE_WEIGHTS);
-    } else if (statusRoll < 0.86) {
-      status = 'recovery_recommended';
-      failureReason = pickWeighted(rng, FAILURE_REASONS, FAILURE_WEIGHTS);
-    } else if (statusRoll < 0.89) {
-      status = 'recovered';
-      failureReason = pickWeighted(rng, FAILURE_REASONS, FAILURE_WEIGHTS);
-    } else if (statusRoll < 0.92) {
-      status = 'at_risk';
-      failureReason = pickWeighted(rng, FAILURE_REASONS, FAILURE_WEIGHTS);
-    } else if (statusRoll < 0.95) {
-      status = 'abandoned';
-      failureReason = 'user_cancelled';
-    } else if (statusRoll < 0.97) {
-      status = 'blocked';
-      failureReason = pickWeighted(rng, FAILURE_REASONS, FAILURE_WEIGHTS);
-    } else {
-      status = 'review_required';
-      failureReason = pickWeighted(rng, FAILURE_REASONS, FAILURE_WEIGHTS);
-    }
-
-    const paymentId = generateId('PAY', i);
-    const orderId = generateId('ORD', i);
-
-    // Compute scores
-    const { score: riskScore, signals: riskSignals } = computeRiskScore(rng, { amount, method, failureReason }, customer);
-    const recoveryProb = failureReason ? computeRecoveryProbability(rng, { method, failureReason }, customer, riskScore) : 0;
-    const customerIntent = computeCustomerIntent(rng, customer, { failureReason });
-    const legitimacy = Math.max(20, Math.round(100 - riskScore * 0.8 + (rng() - 0.5) * 10));
-    const settlementConf = status === 'failed' ? Math.round(40 + rng() * 30) : Math.round(85 + rng() * 15);
-    const healthScore = computeHealthScore(riskScore, recoveryProb || 80, customerIntent, legitimacy, settlementConf);
-
-    // Recommended action
-    const recommendedAction = failureReason ? getRecommendedAction(rng, { method, failureReason }, riskScore, recoveryProb) : null;
-    const attentionCategory = determineAttentionCategory(status, riskScore, recoveryProb, amount);
-
-    // Priority score for attention queue
     let priorityScore = 0;
-    if (failureReason) {
-      priorityScore = Math.round(
-        (amount / 100000) * 30 +
-        recoveryProb * 0.3 +
-        (100 / (1 + Math.max(0, (Date.now() - createdAt.getTime()) / 3600000))) * 0.2 +
-        (100 - riskScore) * 0.2
-      );
+    if (spec.category === 'act_now') {
+      priorityScore = Math.round(75 + (amount / 85000) * 20 + (recoveryProb / 100) * 5);
+    } else if (spec.category === 'review') {
+      priorityScore = Math.round(40 + (amount / 50000) * 20);
     }
 
-    // AI reasoning
+    let customerName = customer.name;
+    let customerEmail = customer.email;
+    let customerPhone = customer.phone;
+
+    if (spec.isHero1) {
+      customerName = 'Rahul Sharma';
+      customerEmail = 'rahul.sharma@email.com';
+      customerPhone = '+919876543001';
+    } else if (spec.isHero2) {
+      customerName = 'Unknown Buyer';
+      customerEmail = 'buyer42@email.com';
+      customerPhone = '+919800000042';
+    } else if (spec.isHero3) {
+      customerName = 'Sneha Patel';
+      customerEmail = 'sneha.patel@email.com';
+      customerPhone = '+919876543015';
+    }
+
     let aiReasoning = null;
     let aiEvidence = [];
-    if (recommendedAction) {
-      const actionLabels = {
-        offer_upi: 'UPI', retry_same_method: 'retry', send_payment_link: 'payment link',
-        retry_later: 'delayed retry', manual_review: 'manual review', block: 'block recovery',
-        offer_card: 'card'
-      };
-      const actionLabel = actionLabels[recommendedAction] || recommendedAction;
 
-      if (recommendedAction === 'block') {
-        aiReasoning = `Recovery blocked because transaction risk (${riskScore}%) exceeds the merchant's safety threshold. High recovery probability does not mean safe recovery.`;
-        aiEvidence = [
-          `Risk score: ${riskScore}%`,
-          `Recovery probability: ${recoveryProb}% (high, but unsafe)`,
-          `Multiple risk signals detected`,
-        ];
-      } else {
-        aiReasoning = `Pulse recommended ${actionLabel} because similar customers recover through this method ${recoveryProb}% of the time after ${failureReason.replace(/_/g, ' ')} failures.`;
-        aiEvidence = [
-          `Customer has ${customer.successfulTransactions} previous successful payments`,
-          `Failure is a ${failureReason.replace(/_/g, ' ')}`,
-          `Fraud probability is only ${riskScore}%`,
-          `Customer intent score: ${customerIntent}%`,
-          `Similar payments recover through ${actionLabel} ${recoveryProb}% of the time`,
-        ];
-      }
+    if (spec.isHero1) {
+      aiReasoning = 'Pulse recommended UPI because similar customers recover through UPI 2.4x more often after issuer decline failures.';
+      aiEvidence = [
+        'Customer has 8 previous successful UPI payments',
+        'Current failure is issuer decline',
+        'Customer has low risk (4%)',
+        'Customer session is active',
+        'Similar merchant card failures recover 76% of the time through UPI (2.4x higher than card retry)',
+      ];
+    } else if (spec.isHero2) {
+      aiReasoning = "High recovery probability does not mean safe recovery. Risk score exceeds merchant safety threshold.";
+      aiEvidence = [
+        'Risk score: 94% (critical)',
+        'Merchant safety threshold: 30%',
+        'New customer with no transaction history',
+        'Amount anomaly: ₹85,000 significantly higher than store average',
+        'Payment from unrecognized device',
+        'Velocity anomaly: multiple rapid attempts',
+        'Recovery probability is 90% but automatic recovery blocked for safety',
+      ];
+    } else if (recommendedAction === 'offer_upi') {
+      aiReasoning = 'Pulse recommended UPI because similar customers recover through UPI 2.4x more often after issuer decline.';
+      aiEvidence = [
+        `Customer has ${customer.successfulTransactions} previous successful UPI payments`,
+        'Failure is a temporary issuer decline',
+        `Fraud probability is only ${riskScore}%`,
+        'Customer is still active on the platform',
+      ];
+    } else if (recommendedAction === 'block') {
+      aiReasoning = `Recovery blocked because transaction risk (${riskScore}%) exceeds the merchant's safety threshold. High recovery probability does not mean safe recovery.`;
+      aiEvidence = [`Risk score: ${riskScore}%`, 'High recovery probability does not mean safe recovery'];
+    } else if (recommendedAction === 'send_payment_link') {
+      aiReasoning = 'High customer purchase intent detected on abandoned checkout. Automated WhatsApp payment link recommended.';
+      aiEvidence = [`Customer intent score: ${customerIntent}%`, 'Historical link recovery rate: 63%'];
     }
 
-    const payment = {
+    payments.push({
       paymentId,
       orderId,
       merchantId,
@@ -294,9 +318,9 @@ function generatePaymentsAndRelated(customers, merchantId) {
       method,
       status,
       failureReason,
-      customerName: customer.name,
-      customerEmail: customer.email,
-      customerPhone: customer.phone,
+      customerName,
+      customerEmail,
+      customerPhone,
       description: `Order ${orderId}`,
       riskScore,
       recoveryProbability: recoveryProb,
@@ -305,463 +329,169 @@ function generatePaymentsAndRelated(customers, merchantId) {
       legitimacyScore: legitimacy,
       settlementConfidence: settlementConf,
       recommendedAction,
-      actualRecoveryAction: status === 'recovered' ? recommendedAction : null,
-      outcome: status === 'recovered' ? 'recovered' : (status === 'captured' || status === 'settled' || status === 'reconciled' ? 'captured' : null),
+      actualRecoveryAction,
+      outcome,
       aiReasoning,
       aiEvidence,
       priorityScore,
-      attentionCategory,
+      attentionCategory: spec.category,
       createdAt,
-      processedAt: addSeconds(createdAt, randomInt(rng, 1, 5)),
-      capturedAt: ['captured', 'settled', 'reconciled', 'recovered'].includes(status) ? addSeconds(createdAt, randomInt(rng, 5, 30)) : null,
-      failedAt: failureReason ? addSeconds(createdAt, randomInt(rng, 2, 8)) : null,
-      recoveredAt: status === 'recovered' ? addMinutes(createdAt, randomInt(rng, 1, 60)) : null,
-      settledAt: ['settled', 'reconciled'].includes(status) ? addDays(createdAt, randomInt(rng, 1, 3)) : null,
-      reconciledAt: status === 'reconciled' ? addDays(createdAt, randomInt(rng, 1, 4)) : null,
+      processedAt: addSeconds(createdAt, randomInt(rng, 1, 4)),
+      capturedAt: ['captured', 'settled', 'reconciled', 'recovered'].includes(status) ? addSeconds(createdAt, 10) : null,
+      failedAt: failureReason ? addSeconds(createdAt, 4) : null,
+      recoveredAt: status === 'recovered' ? addMinutes(createdAt, 15) : null,
+      settledAt: ['settled', 'reconciled'].includes(status) ? addDays(createdAt, 2) : null,
+      reconciledAt: status === 'reconciled' ? addDays(createdAt, 2) : null,
       deviceType: device,
-    };
+    });
 
-    payments.push(payment);
+    // Payment Attempts: Exactly 3,000 attempts total
+    // Payments 0..999 get 2 attempts (2,000 attempts)
+    // Payments 1000..1999 get 1 attempt (1,000 attempts)
+    // Total attempts = 3,000!
+    const firstStatus = ['captured', 'settled', 'reconciled'].includes(status) ? 'success' : 'failed';
+    attempts.push({
+      attemptId: generateId('ATT', attemptCounter++),
+      paymentId,
+      merchantId,
+      method,
+      status: firstStatus,
+      failureReason: firstStatus === 'failed' ? (failureReason || 'issuer_decline') : null,
+      deviceType: device,
+      customerIntent,
+      riskSignals: riskScore > 50 ? [{ signal: 'amount_anomaly', severity: 'high', description: 'Elevated transaction anomaly' }] : [],
+      isRecoveryAttempt: false,
+      recoveryMethod: null,
+      timestamp: createdAt,
+      duration: randomInt(rng, 800, 3200),
+    });
 
-    // Generate 1-3 attempts per payment
-    const attemptCount = failureReason ? randomInt(rng, 1, 3) : 1;
-    for (let a = 0; a < attemptCount; a++) {
-      const isLast = a === attemptCount - 1;
-      const attemptStatus = isLast
-        ? (['captured', 'settled', 'reconciled', 'recovered'].includes(status) ? 'success' : 'failed')
-        : 'failed';
-
+    if (i < 1000) {
+      const secondStatus = status === 'recovered' ? 'success' : 'failed';
       attempts.push({
         attemptId: generateId('ATT', attemptCounter++),
         paymentId,
         merchantId,
-        method: a === 0 ? method : (recommendedAction === 'offer_upi' ? 'upi' : method),
-        status: attemptStatus,
-        failureReason: attemptStatus === 'failed' ? failureReason : null,
+        method: status === 'recovered' ? 'upi' : method,
+        status: secondStatus,
+        failureReason: secondStatus === 'failed' ? failureReason : null,
         deviceType: device,
         customerIntent,
-        riskSignals: a === 0 ? riskSignals : [],
-        isRecoveryAttempt: a > 0,
-        recoveryMethod: a > 0 ? recommendedAction : null,
-        timestamp: addSeconds(createdAt, a * randomInt(rng, 5, 120)),
-        duration: randomInt(rng, 500, 5000),
+        riskSignals: [],
+        isRecoveryAttempt: true,
+        recoveryMethod: recommendedAction || 'offer_upi',
+        timestamp: addSeconds(createdAt, randomInt(rng, 20, 60)),
+        duration: randomInt(rng, 1200, 4500),
       });
     }
 
-    // Risk assessment for failed/risky payments
-    if (failureReason || riskScore > 20) {
+    // Risk Assessment
+    if (failureReason || riskScore > 20 || spec.isHero1 || spec.isHero2) {
       const riskLevel = riskScore <= 20 ? 'low' : riskScore <= 50 ? 'medium' : riskScore <= 75 ? 'high' : 'critical';
       riskAssessments.push({
         paymentId,
         merchantId,
         riskScore,
         riskLevel,
-        signals: riskSignals,
-        explanation: riskScore > 50
-          ? `High risk detected: ${riskSignals.map(s => s.description).join('. ')}`
-          : `Low risk. ${riskSignals.length > 0 ? riskSignals.map(s => s.description).join('. ') : 'No significant risk signals.'}`,
+        signals: [
+          { signal: 'method_anomaly', weight: 8, description: 'Evaluation against customer preference', severity: 'low' },
+          ...(riskScore > 50 ? [{ signal: 'amount_anomaly', weight: 25, description: 'High transaction value anomaly', severity: 'high' }] : []),
+        ],
+        explanation: spec.isHero2
+          ? "High recovery probability does not mean safe recovery. Risk score exceeds merchant safety threshold."
+          : (riskScore > 50
+            ? `High risk score (${riskScore}%). High recovery probability does not justify fraud exposure.`
+            : `Low risk score (${riskScore}%). Payment is verified safe for automated recovery.`),
         modelVersion: '1.0.0',
-        createdAt: addSeconds(createdAt, 3),
+        createdAt: addSeconds(createdAt, 2),
       });
     }
 
-    // Recovery actions for failed payments with recovery potential
-    if (failureReason && recoveryProb > 20) {
-      const actions = ['retry_same_method', 'offer_upi', 'send_payment_link', 'retry_later'];
-      if (riskScore > 50) actions.push('manual_review');
-      if (riskScore > 75) actions.push('block');
-
-      const methodProbs = {
-        retry_same_method: Math.max(10, recoveryProb - 30 + randomInt(rng, -5, 5)),
-        offer_upi: Math.min(95, recoveryProb + 10 + randomInt(rng, -5, 10)),
-        offer_card: Math.max(15, recoveryProb - 15 + randomInt(rng, -5, 5)),
-        send_payment_link: Math.max(20, recoveryProb - 10 + randomInt(rng, -5, 5)),
-        retry_later: Math.max(15, recoveryProb - 20 + randomInt(rng, -5, 5)),
-        manual_review: Math.max(5, recoveryProb - 40),
-        block: 0,
-      };
-
-      for (const action of actions) {
-        const prob = methodProbs[action] || 0;
-        const expectedRev = Math.round(amount * prob / 100);
-        const riskPenalty = riskScore * amount * 0.002;
-        const friction = action === 'send_payment_link' ? amount * 0.05 : action === 'retry_later' ? amount * 0.03 : amount * 0.01;
-        const safeExpectedValue = Math.max(0, Math.round(expectedRev - riskPenalty - friction));
-
+    // Recovery Actions
+    if (spec.isHero1) {
+      const hero1Options = [
+        { action: 'retry_same_method', prob: 31, exp: 2325, isRec: false },
+        { action: 'offer_upi', prob: 78, exp: 5847, isRec: true },
+        { action: 'send_payment_link', prob: 62, exp: 4649, isRec: false },
+        { action: 'retry_later', prob: 44, exp: 3299, isRec: false },
+      ];
+      for (const opt of hero1Options) {
         recoveryActions.push({
           recoveryId: generateId('REC', recoveryCounter++),
           paymentId,
           merchantId,
-          action,
-          predictedProbability: prob,
-          expectedRevenue: expectedRev,
-          risk: riskScore,
-          estimatedFriction: Math.round(friction),
-          safeExpectedValue,
-          executed: action === recommendedAction && status === 'recovered',
-          executedAt: status === 'recovered' && action === recommendedAction ? addMinutes(createdAt, randomInt(rng, 1, 30)) : null,
-          executedBy: status === 'recovered' && action === recommendedAction ? (rng() < 0.4 ? 'autopilot' : 'merchant') : null,
-          outcome: status === 'recovered' && action === recommendedAction ? 'success' : null,
-          reasoning: action === recommendedAction
-            ? `Best safe expected value of ₹${safeExpectedValue.toLocaleString('en-IN')} with ${prob}% probability`
-            : null,
-          isRecommended: action === recommendedAction,
-          timestamp: addSeconds(createdAt, 5),
+          action: opt.action,
+          predictedProbability: opt.prob,
+          expectedRevenue: opt.exp,
+          risk: 4,
+          estimatedFriction: Math.round(7499 * 0.01),
+          safeExpectedValue: Math.round(opt.exp - 4 * 7499 * 0.002 - 7499 * 0.01),
+          executed: false,
+          executedAt: null,
+          executedBy: null,
+          outcome: null,
+          reasoning: opt.isRec ? 'Best safe expected value (₹5,847). Similar customers recover through UPI 2.4x more often after issuer decline.' : null,
+          isRecommended: opt.isRec,
+          timestamp: addSeconds(createdAt, 4),
         });
       }
-    }
-
-    // Settlements for captured/settled/reconciled/recovered
-    if (['captured', 'settled', 'reconciled', 'recovered'].includes(status)) {
-      const feeRate = 0.018 + rng() * 0.004; // 1.8-2.2%
-      const fees = Math.round(amount * feeRate);
-      const tax = Math.round(fees * 0.18); // 18% GST on fees
-      const refundAmt = 0;
-
-      // 10% chance of adjustment for settled/reconciled
-      const hasAdjustment = status === 'reconciled' && rng() < 0.15;
-      const adjustment = hasAdjustment ? Math.round(100 + rng() * 600) : 0;
-      const expectedAmount = amount - fees - tax - refundAmt;
-      const actualAmount = status === 'reconciled'
-        ? expectedAmount - adjustment
-        : (['settled', 'reconciled'].includes(status) ? expectedAmount : null);
-      const variance = actualAmount !== null ? expectedAmount - actualAmount : 0;
-
-      const settlementId = generateId('STL', settlementCounter++);
-      const settleStatus = status === 'reconciled'
-        ? (variance === 0 ? 'reconciled' : 'exception')
-        : (status === 'settled' ? 'processed' : 'pending');
-
-      settlements.push({
-        settlementId,
-        paymentId,
-        merchantId,
-        capturedAmount: amount,
-        fees,
-        tax,
-        refundAmount: refundAmt,
-        adjustments: adjustment,
-        expectedAmount,
-        actualAmount,
-        variance,
-        status: settleStatus,
-        settledAt: ['settled', 'reconciled'].includes(status) ? addDays(createdAt, randomInt(rng, 1, 3)) : null,
-        reconciledAt: status === 'reconciled' ? addDays(createdAt, randomInt(rng, 2, 4)) : null,
-      });
-
-      // Reconciliation records for reconciled payments
-      if (status === 'reconciled') {
-        const varianceType = variance === 0 ? 'none'
-          : (adjustment > 0 ? 'settlement_adjustment' : 'fee_adjustment');
-
-        const evidence = [
-          { step: 'Payment captured', status: 'match', detail: `₹${amount.toLocaleString('en-IN')} captured correctly` },
-          { step: 'Fee calculation', status: 'match', detail: `₹${fees.toLocaleString('en-IN')} fee (${(feeRate * 100).toFixed(1)}%)` },
-          { step: 'GST calculation', status: 'match', detail: `₹${tax.toLocaleString('en-IN')} GST (18% on fees)` },
-          { step: 'Refund check', status: 'match', detail: 'No refunds processed' },
-        ];
-
-        if (adjustment > 0) {
-          evidence.push({
-            step: 'Settlement adjustment',
-            status: 'warning',
-            detail: `₹${adjustment.toLocaleString('en-IN')} adjustment detected`,
-          });
-        } else {
-          evidence.push({
-            step: 'Settlement amount', status: 'match',
-            detail: `₹${expectedAmount.toLocaleString('en-IN')} settled correctly`,
-          });
-        }
-
-        reconciliations.push({
-          reconciliationId: generateId('RECON', reconciliationCounter++),
-          settlementId,
+    } else if (recommendedAction && recoveryProb > 0) {
+      const actions = [
+        { action: 'retry_same_method', prob: Math.max(15, recoveryProb - 35) },
+        { action: 'offer_upi', prob: recoveryProb, isRec: recommendedAction === 'offer_upi' },
+        { action: 'send_payment_link', prob: Math.max(20, recoveryProb - 18) },
+        { action: 'retry_later', prob: Math.max(20, recoveryProb - 28) },
+      ];
+      for (const a of actions) {
+        const exp = Math.round(amount * a.prob / 100);
+        recoveryActions.push({
+          recoveryId: generateId('REC', recoveryCounter++),
           paymentId,
           merchantId,
-          expectedAmount,
-          actualAmount: actualAmount || expectedAmount,
-          variance,
-          varianceType,
-          status: variance === 0 ? 'matched' : 'exception',
-          investigation: variance !== 0 ? {
-            likelyCause: adjustment > 0 ? 'Settlement adjustment by payment processor' : 'Fee recalculation',
-            confidence: 88 + randomInt(rng, 0, 10),
-            evidence,
-            recommendation: adjustment > 0 ? 'Review adjustment with Razorpay support' : 'Verify fee structure',
-          } : {
-            likelyCause: null,
-            confidence: 100,
-            evidence,
-            recommendation: null,
-          },
+          action: a.action,
+          predictedProbability: a.prob,
+          expectedRevenue: exp,
+          risk: riskScore,
+          estimatedFriction: Math.round(amount * 0.01),
+          safeExpectedValue: Math.max(0, Math.round(exp - riskScore * amount * 0.002 - amount * 0.01)),
+          executed: status === 'recovered' && a.action === 'offer_upi',
+          executedAt: status === 'recovered' && a.action === 'offer_upi' ? addMinutes(createdAt, 5) : null,
+          executedBy: status === 'recovered' && a.action === 'offer_upi' ? 'autopilot' : null,
+          outcome: status === 'recovered' && a.action === 'offer_upi' ? 'success' : null,
+          reasoning: a.isRec ? aiReasoning : null,
+          isRecommended: !!a.isRec,
+          timestamp: addSeconds(createdAt, 4),
         });
       }
     }
 
-    // Audit logs for AI-actioned payments
-    if (status === 'recovered' || status === 'blocked') {
+    // Audit logs: Push 520+ logs
+    if (recommendedAction || status === 'recovered' || spec.isHero1 || spec.isHero2) {
       auditLogs.push({
         auditId: generateId('AUD', auditCounter++),
         merchantId,
         paymentId,
-        action: recommendedAction,
-        decision: status === 'recovered' ? `Execute ${recommendedAction}` : 'Block recovery',
-        reason: aiReasoning,
+        action: recommendedAction || 'offer_upi',
+        decision: spec.isHero2 ? 'Block automatic recovery' : (status === 'recovered' ? 'Executed UPI recovery' : `Recommend ${recommendedAction}`),
+        reason: aiReasoning || 'AI policy evaluation based on risk threshold',
         riskScore,
         recoveryProbability: recoveryProb,
-        executedBy: rng() < 0.4 ? 'autopilot' : 'merchant',
-        result: status === 'recovered' ? 'success' : 'blocked',
+        executedBy: status === 'recovered' ? 'autopilot' : (status === 'blocked' ? 'system' : 'merchant'),
+        result: status === 'recovered' ? 'success' : (status === 'blocked' ? 'blocked' : 'pending'),
         userOverride: false,
         modelVersion: '1.0.0',
-        timestamp: addSeconds(createdAt, randomInt(rng, 10, 120)),
+        timestamp: addSeconds(createdAt, randomInt(rng, 5, 60)),
       });
     }
   }
 
-  // === HERO DEMO PAYMENTS ===
-  // Ensure specific demo scenarios exist
+  // Exactly 200 Settlements and 200 Reconciliations
+  // Find payment PAY48293
+  const hero3Payment = payments.find(p => p.paymentId === 'PAY48293') || payments[580];
+  const eligibleSettlementPayments = payments.filter(p => ['captured', 'settled', 'reconciled'].includes(p.status) && p.paymentId !== 'PAY48293');
 
-  // HERO 1: ₹7,499 Rahul Sharma card failure
-  const heroDate1 = new Date();
-  heroDate1.setHours(10, 31, 2, 0);
-  const heroPayment1 = {
-    paymentId: 'PAY48291',
-    orderId: 'ORD48291',
-    merchantId,
-    customerId: 'CUST00001',
-    amount: 7499,
-    currency: 'INR',
-    method: 'card',
-    status: 'recovery_recommended',
-    failureReason: 'issuer_decline',
-    customerName: 'Rahul Sharma',
-    customerEmail: 'rahul.sharma@email.com',
-    customerPhone: '+919876543001',
-    description: 'Order ORD48291',
-    riskScore: 4,
-    recoveryProbability: 81,
-    healthScore: 78,
-    customerIntent: 89,
-    legitimacyScore: 96,
-    settlementConfidence: 98,
-    recommendedAction: 'offer_upi',
-    actualRecoveryAction: null,
-    outcome: null,
-    aiReasoning: 'Pulse recommended UPI because similar customers recover through UPI 2.4x more often after issuer decline failures.',
-    aiEvidence: [
-      'Customer has 8 previous successful UPI payments',
-      'Failure is a temporary issuer decline',
-      'Fraud probability is only 2%',
-      'Customer is still active on the platform',
-      'Similar payments recover through UPI 76% of the time',
-    ],
-    priorityScore: 82,
-    attentionCategory: 'act_now',
-    createdAt: heroDate1,
-    processedAt: addSeconds(heroDate1, 3),
-    capturedAt: null,
-    failedAt: addSeconds(heroDate1, 5),
-    recoveredAt: null,
-    settledAt: null,
-    reconciledAt: null,
-    deviceType: 'mobile',
-  };
-
-  // HERO 2: ₹85,000 high-risk payment
-  const heroDate2 = new Date();
-  heroDate2.setHours(11, 15, 0, 0);
-  const heroPayment2 = {
-    paymentId: 'PAY48292',
-    orderId: 'ORD48292',
-    merchantId,
-    customerId: 'CUST00042',
-    amount: 85000,
-    currency: 'INR',
-    method: 'card',
-    status: 'blocked',
-    failureReason: 'bank_decline',
-    customerName: 'Unknown Buyer',
-    customerEmail: 'buyer42@email.com',
-    customerPhone: '+919800000042',
-    description: 'Order ORD48292',
-    riskScore: 94,
-    recoveryProbability: 90,
-    healthScore: 22,
-    customerIntent: 45,
-    legitimacyScore: 18,
-    settlementConfidence: 30,
-    recommendedAction: 'block',
-    actualRecoveryAction: 'block',
-    outcome: 'blocked',
-    aiReasoning: 'Recovery blocked because transaction risk (94%) exceeds the merchant\'s safety threshold. High recovery probability does not mean safe recovery.',
-    aiEvidence: [
-      'Risk score: 94% (critical)',
-      'New customer with no transaction history',
-      'Amount anomaly: significantly higher than average',
-      'Payment from unrecognized device',
-      'Velocity anomaly: multiple rapid attempts',
-      'Recovery probability is 90% but unsafe due to risk',
-    ],
-    priorityScore: 95,
-    attentionCategory: 'act_now',
-    createdAt: heroDate2,
-    processedAt: addSeconds(heroDate2, 2),
-    capturedAt: null,
-    failedAt: addSeconds(heroDate2, 4),
-    recoveredAt: null,
-    settledAt: null,
-    reconciledAt: null,
-    deviceType: 'desktop',
-  };
-
-  // HERO 3: Settlement mismatch ₹9,112 expected vs ₹8,712 actual
-  const heroDate3 = new Date();
-  heroDate3.setDate(heroDate3.getDate() - 2);
-  const heroPayment3 = {
-    paymentId: 'PAY48293',
-    orderId: 'ORD48293',
-    merchantId,
-    customerId: 'CUST00015',
-    amount: 9500,
-    currency: 'INR',
-    method: 'upi',
-    status: 'reconciled',
-    failureReason: null,
-    customerName: 'Sneha Patel',
-    customerEmail: 'sneha.patel@email.com',
-    customerPhone: '+919876543015',
-    description: 'Order ORD48293',
-    riskScore: 3,
-    recoveryProbability: 0,
-    healthScore: 92,
-    customerIntent: 95,
-    legitimacyScore: 98,
-    settlementConfidence: 75,
-    recommendedAction: null,
-    actualRecoveryAction: null,
-    outcome: 'captured',
-    aiReasoning: null,
-    aiEvidence: [],
-    priorityScore: 0,
-    attentionCategory: 'review',
-    createdAt: heroDate3,
-    processedAt: addSeconds(heroDate3, 2),
-    capturedAt: addSeconds(heroDate3, 8),
-    failedAt: null,
-    recoveredAt: null,
-    settledAt: addDays(heroDate3, 2),
-    reconciledAt: addDays(heroDate3, 2),
-    deviceType: 'mobile',
-  };
-
-  // Add hero payments (replace if existing IDs conflict)
-  const heroPayments = [heroPayment1, heroPayment2, heroPayment3];
-  for (const hp of heroPayments) {
-    const idx = payments.findIndex(p => p.paymentId === hp.paymentId);
-    if (idx >= 0) payments[idx] = hp;
-    else payments.push(hp);
-  }
-
-  // Hero 1 recovery actions
-  const hero1RecoveryActions = [
-    { action: 'retry_same_method', prob: 31, label: 'Retry card' },
-    { action: 'offer_upi', prob: 78, label: 'Offer UPI' },
-    { action: 'send_payment_link', prob: 62, label: 'Payment link' },
-    { action: 'retry_later', prob: 44, label: 'Retry later' },
-  ];
-  for (const ra of hero1RecoveryActions) {
-    const expectedRev = Math.round(7499 * ra.prob / 100);
-    recoveryActions.push({
-      recoveryId: generateId('REC', recoveryCounter++),
-      paymentId: 'PAY48291',
-      merchantId,
-      action: ra.action,
-      predictedProbability: ra.prob,
-      expectedRevenue: expectedRev,
-      risk: 4,
-      estimatedFriction: Math.round(7499 * 0.01),
-      safeExpectedValue: Math.round(expectedRev - 4 * 7499 * 0.002 - 7499 * 0.01),
-      executed: false,
-      executedAt: null,
-      executedBy: null,
-      outcome: null,
-      reasoning: ra.action === 'offer_upi'
-        ? 'Best safe expected value. Similar customers recover through UPI 2.4x more often after issuer decline.'
-        : null,
-      isRecommended: ra.action === 'offer_upi',
-      timestamp: addSeconds(heroDate1, 6),
-    });
-  }
-
-  // Hero 1 attempts
-  attempts.push({
-    attemptId: generateId('ATT', attemptCounter++),
-    paymentId: 'PAY48291',
-    merchantId,
-    method: 'card',
-    status: 'failed',
-    failureReason: 'issuer_decline',
-    deviceType: 'mobile',
-    customerIntent: 89,
-    riskSignals: [],
-    isRecoveryAttempt: false,
-    recoveryMethod: null,
-    timestamp: heroDate1,
-    duration: 3200,
-  });
-
-  // Hero 1 risk assessment
-  riskAssessments.push({
-    paymentId: 'PAY48291',
-    merchantId,
-    riskScore: 4,
-    riskLevel: 'low',
-    signals: [
-      { signal: 'method_anomaly', weight: 4, description: 'Card payment but customer prefers UPI', severity: 'low' },
-    ],
-    explanation: 'Low risk. Customer has strong payment history. Only minor signal: payment method differs from preference.',
-    modelVersion: '1.0.0',
-    createdAt: addSeconds(heroDate1, 3),
-  });
-
-  // Hero 2 risk assessment
-  riskAssessments.push({
-    paymentId: 'PAY48292',
-    merchantId,
-    riskScore: 94,
-    riskLevel: 'critical',
-    signals: [
-      { signal: 'new_customer', weight: 18, description: 'First-time customer with no transaction history', severity: 'high' },
-      { signal: 'amount_anomaly', weight: 22, description: 'Transaction amount significantly higher than average', severity: 'critical' },
-      { signal: 'new_device', weight: 14, description: 'Payment from an unrecognized device', severity: 'medium' },
-      { signal: 'velocity_anomaly', weight: 20, description: 'Multiple rapid payment attempts detected', severity: 'high' },
-      { signal: 'high_value', weight: 20, description: 'High-value transaction requiring additional scrutiny', severity: 'high' },
-    ],
-    explanation: 'Critical risk detected: New customer, extremely high value, unrecognized device, and velocity anomaly.',
-    modelVersion: '1.0.0',
-    createdAt: addSeconds(heroDate2, 2),
-  });
-
-  // Hero 2 audit log
-  auditLogs.push({
-    auditId: generateId('AUD', auditCounter++),
-    merchantId,
-    paymentId: 'PAY48292',
-    action: 'block',
-    decision: 'Block recovery',
-    reason: 'Recovery blocked because transaction risk (94%) exceeds the merchant\'s safety threshold.',
-    riskScore: 94,
-    recoveryProbability: 90,
-    executedBy: 'system',
-    result: 'blocked',
-    userOverride: false,
-    modelVersion: '1.0.0',
-    timestamp: addSeconds(heroDate2, 5),
-  });
-
-  // Hero 3 settlement
-  const hero3Settlement = {
+  // Hero Settlement STL48293 & Recon RECON48293
+  settlements.push({
     settlementId: 'STL48293',
     paymentId: 'PAY48293',
     merchantId,
@@ -770,16 +500,15 @@ function generatePaymentsAndRelated(customers, merchantId) {
     tax: 34,
     refundAmount: 0,
     adjustments: 400,
-    expectedAmount: 9112, // 9500 - 190 - 34 - 0 - (but 164 is for base calc, adjustment is 400 from actual)
-    actualAmount: 8712, // 9112 - 400
+    expectedAmount: 9112,
+    actualAmount: 8712,
     variance: 400,
     status: 'exception',
-    settledAt: addDays(heroDate3, 2),
-    reconciledAt: addDays(heroDate3, 2),
-  };
-  settlements.push(hero3Settlement);
+    settledAt: addDays(hero3Payment.createdAt, 2),
+    reconciledAt: addDays(hero3Payment.createdAt, 2),
+    createdAt: hero3Payment.createdAt,
+  });
 
-  // Hero 3 reconciliation
   reconciliations.push({
     reconciliationId: 'RECON48293',
     settlementId: 'STL48293',
@@ -791,18 +520,71 @@ function generatePaymentsAndRelated(customers, merchantId) {
     varianceType: 'settlement_adjustment',
     status: 'exception',
     investigation: {
-      likelyCause: 'Settlement adjustment by payment processor',
+      likelyCause: 'Processor Settlement Adjustment',
       confidence: 92,
       evidence: [
         { step: 'Payment captured', status: 'match', detail: '₹9,500 captured correctly' },
-        { step: 'Fee calculation', status: 'match', detail: '₹190 fee (2.0%)' },
-        { step: 'GST calculation', status: 'match', detail: '₹34 GST (18% on fees)' },
-        { step: 'Refund check', status: 'match', detail: 'No refunds processed' },
-        { step: 'Settlement adjustment', status: 'warning', detail: '₹400 adjustment detected' },
+        { step: 'Processor MDR fee calculated', status: 'match', detail: '₹190 MDR fee calculated' },
+        { step: 'GST calculated', status: 'match', detail: '₹34 GST calculated (18% on fees)' },
+        { step: 'Refunds checked', status: 'match', detail: 'No refunds processed' },
+        { step: 'Processor adjustment detected', status: 'warning', detail: '₹400 processor adjustment identified' },
       ],
-      recommendation: 'Review adjustment with Razorpay support',
+      recommendation: 'Review adjustment with settlement/processor operations.',
     },
+    createdAt: addDays(hero3Payment.createdAt, 2),
   });
+
+  // Remaining 199 Settlements and Reconciliations (Matched)
+  for (let s = 1; s < 200; s++) {
+    const p = eligibleSettlementPayments[s % eligibleSettlementPayments.length];
+    const settlementId = generateId('STL', s + 1);
+    const feeRate = 0.02;
+    const fees = Math.round(p.amount * feeRate);
+    const tax = Math.round(fees * 0.18);
+    const expectedAmount = p.amount - fees - tax;
+
+    settlements.push({
+      settlementId,
+      paymentId: p.paymentId,
+      merchantId,
+      capturedAmount: p.amount,
+      fees,
+      tax,
+      refundAmount: 0,
+      adjustments: 0,
+      expectedAmount,
+      actualAmount: expectedAmount,
+      variance: 0,
+      status: 'reconciled',
+      settledAt: addDays(p.createdAt, 2),
+      reconciledAt: addDays(p.createdAt, 2),
+      createdAt: p.createdAt,
+    });
+
+    reconciliations.push({
+      reconciliationId: generateId('RECON', s + 1),
+      settlementId,
+      paymentId: p.paymentId,
+      merchantId,
+      expectedAmount,
+      actualAmount: expectedAmount,
+      variance: 0,
+      varianceType: 'none',
+      status: 'matched',
+      investigation: {
+        likelyCause: null,
+        confidence: 100,
+        evidence: [
+          { step: 'Payment captured', status: 'match', detail: `₹${p.amount.toLocaleString('en-IN')} captured correctly` },
+          { step: 'MDR fee calculated', status: 'match', detail: `₹${fees.toLocaleString('en-IN')} fee (2%)` },
+          { step: 'GST calculated', status: 'match', detail: `₹${tax.toLocaleString('en-IN')} GST (18%)` },
+          { step: 'Settlement confirmed', status: 'match', detail: `₹${expectedAmount.toLocaleString('en-IN')} credited to merchant bank account` },
+        ],
+        recommendation: null,
+      },
+      createdAt: addDays(p.createdAt, 2),
+    });
+  }
 
   return { payments, attempts, riskAssessments, recoveryActions, settlements, reconciliations, auditLogs };
 }

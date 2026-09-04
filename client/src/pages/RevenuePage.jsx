@@ -34,21 +34,44 @@ export default function RevenuePage() {
     }
   };
 
-  const leakageData = [
-    { name: 'Temporary Failures', amount: 174000, color: '#3395FF', recoverable: 'High (UPI Routing)' },
-    { name: 'Cart Abandonment', amount: 92000, color: '#818CF8', recoverable: 'Med (Payment Links)' },
-    { name: 'Risk Holds', amount: 71000, color: '#F87171', recoverable: 'Stop (Fraud Prevented)' },
-    { name: 'Permanent Declines', amount: 63000, color: '#CBD5E1', recoverable: 'Low (Expired)' },
-    { name: 'Unresolved', amount: 42000, color: '#FBBF24', recoverable: 'Delayed Retry' },
-    { name: 'Settlement Variance', amount: 40000, color: '#FB923C', recoverable: 'Audit & Recon' },
-  ];
-
-  const counterfactualChannels = [
+  const defaultChannels = [
     { channel: 'Alternative Payment Routing (Cards → UPI)', amount: 71000, pct: '54%' },
     { channel: 'Smart Delay Retry Timing (Bank load clearance)', amount: 32000, pct: '24%' },
     { channel: 'High-Intent Cart Abandonment WhatsApp Links', amount: 19000, pct: '15%' },
     { channel: 'Subscription Auto-Retry Optimization', amount: 9000, pct: '7%' },
   ];
+
+  const cf = summaryData?.counterfactual || {
+    attemptedGMV: 4820000,
+    baselineRecovery: 83000,
+    actualRecovered: 214000,
+    additionalAiUplift: 131000,
+    naturalReturnRate: 19,
+    breakdown: defaultChannels,
+  };
+
+  const lk = summaryData?.leakage || {
+    temporaryFailures: 174000,
+    customerAbandonment: 92000,
+    riskHolds: 71000,
+    permanentDeclines: 63000,
+    unresolved: 42000,
+    settlementVariance: 40000,
+  };
+
+  const recoverableAmount = summaryData?.summary?.recoverableAmount || 266000;
+  const totalLeakageAmount = (lk.temporaryFailures || 0) + (lk.customerAbandonment || 0) + (lk.riskHolds || 0) + (lk.permanentDeclines || 0) + (lk.unresolved || 0) + (lk.settlementVariance || 0);
+
+  const leakageData = [
+    { name: 'Temporary Failures', amount: lk.temporaryFailures || 174000, color: '#3395FF', recoverable: 'High (UPI Routing)' },
+    { name: 'Cart Abandonment', amount: lk.customerAbandonment || 92000, color: '#818CF8', recoverable: 'Med (Payment Links)' },
+    { name: 'Risk Holds', amount: lk.riskHolds || 71000, color: '#F87171', recoverable: 'Stop (Fraud Prevented)' },
+    { name: 'Permanent Declines', amount: lk.permanentDeclines || 63000, color: '#CBD5E1', recoverable: 'Low (Expired)' },
+    { name: 'Unresolved', amount: lk.unresolved || 42000, color: '#FBBF24', recoverable: 'Delayed Retry' },
+    { name: 'Settlement Variance', amount: lk.settlementVariance || 40000, color: '#FB923C', recoverable: 'Audit & Recon' },
+  ];
+
+  const counterfactualChannels = cf.breakdown || defaultChannels;
 
   return (
     <div className="space-y-6">
@@ -86,19 +109,25 @@ export default function RevenuePage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white/5 rounded-xl p-4 border border-white/10">
             <span className="text-xs text-slate-400 font-medium">Total Attempted GMV</span>
-            <div className="text-2xl font-extrabold text-white mt-1">₹48.2L</div>
+            <div className="text-2xl font-extrabold text-white mt-1">
+              {formatCompactCurrency(cf.attemptedGMV)}
+            </div>
             <span className="text-[10px] text-slate-400">Total transaction orders</span>
           </div>
 
           <div className="bg-white/5 rounded-xl p-4 border border-white/10">
             <span className="text-xs text-slate-400 font-medium">Baseline Recovery (No AI)</span>
-            <div className="text-2xl font-extrabold text-slate-300 mt-1">₹0.83L</div>
-            <span className="text-[10px] text-slate-400">Merchant natural return rate (19%)</span>
+            <div className="text-2xl font-extrabold text-slate-300 mt-1">
+              {formatCompactCurrency(cf.baselineRecovery)}
+            </div>
+            <span className="text-[10px] text-slate-400">Merchant natural return rate ({cf.naturalReturnRate || 19}%)</span>
           </div>
 
           <div className="bg-white/5 rounded-xl p-4 border border-white/10">
             <span className="text-xs text-[#3395FF] font-semibold">Actual Recovered by Pulse</span>
-            <div className="text-2xl font-extrabold text-[#3395FF] mt-1">₹2.14L</div>
+            <div className="text-2xl font-extrabold text-[#3395FF] mt-1">
+              {formatCompactCurrency(cf.actualRecovered)}
+            </div>
             <span className="text-[10px] text-slate-400">Safe realized payments</span>
           </div>
 
@@ -107,8 +136,12 @@ export default function RevenuePage() {
               <TrendingUp className="w-3.5 h-3.5" />
               Additional AI-Attributed Uplift
             </span>
-            <div className="text-2xl font-extrabold text-emerald-400 mt-1">+₹1.31L</div>
-            <span className="text-[10px] text-emerald-300 font-medium">+158% incremental recovery</span>
+            <div className="text-2xl font-extrabold text-emerald-400 mt-1">
+              +{formatCompactCurrency(cf.additionalAiUplift)}
+            </div>
+            <span className="text-[10px] text-emerald-300 font-medium">
+              +{cf.baselineRecovery ? Math.round((cf.additionalAiUplift / cf.baselineRecovery) * 100) : 158}% incremental recovery
+            </span>
           </div>
         </div>
 
@@ -141,13 +174,15 @@ export default function RevenuePage() {
               </h3>
             </div>
             <p className="text-xs text-pulse-textSecondary mt-0.5">
-              Breakdown of total ₹4.82L potential revenue leakage across operational failure vectors
+              Breakdown of total {formatCompactCurrency(totalLeakageAmount)} potential revenue leakage across operational failure vectors
             </p>
           </div>
 
           <div className="text-right">
             <span className="text-xs text-slate-400">Realistically Recoverable:</span>
-            <span className="text-base font-extrabold text-emerald-700 ml-1.5">₹2.66L</span>
+            <span className="text-base font-extrabold text-emerald-700 ml-1.5">
+              {formatCompactCurrency(recoverableAmount)}
+            </span>
           </div>
         </div>
 

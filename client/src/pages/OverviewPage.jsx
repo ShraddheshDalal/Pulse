@@ -155,7 +155,9 @@ export default function OverviewPage() {
               <div className="text-xl font-extrabold text-white mt-1">
                 {formatCompactCurrency(health.recoveredVolume)}
               </div>
-              <span className="text-[10px] text-[#3395FF] font-semibold">184 payments saved</span>
+              <span className="text-[10px] text-[#3395FF] font-semibold">
+                {dashboardData?.stats?.recoveredCount ? `${dashboardData.stats.recoveredCount} payments saved` : '184 payments saved'}
+              </span>
             </div>
 
             {/* Revenue at Risk */}

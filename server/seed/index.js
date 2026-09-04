@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const path = require('path');
 
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const { connectDB } = require('../config/db');
@@ -23,16 +24,16 @@ const { generatePaymentsAndRelated } = require('./payments');
 const { generateInsights, generatePlaybook } = require('./insights');
 
 async function seed() {
-  console.log('🌱 Starting PULSE seed...\n');
+  console.log('🌱 Starting deterministic PULSE demo seed...\n');
 
   const connected = await connectDB();
   if (!connected) {
-    console.error('❌ Cannot seed without MongoDB connection.');
+    console.error('❌ Cannot seed without MongoDB connection. Please ensure MongoDB is running on 127.0.0.1:27017');
     process.exit(1);
   }
 
-  // Clear existing data
-  console.log('🗑️  Clearing existing data...');
+  // Clear existing PULSE demo collections
+  console.log('🗑️  Clearing existing demo collection data...');
   await Promise.all([
     Merchant.deleteMany({}),
     Customer.deleteMany({}),
@@ -47,67 +48,76 @@ async function seed() {
     AuditLog.deleteMany({}),
   ]);
 
-  // Generate merchant
+  // 1. Generate merchant
   const merchantData = generateMerchant();
   const merchant = await Merchant.create(merchantData);
-  console.log(`✅ Merchant: ${merchant.businessName}`);
 
-  // Generate customers
+  // 2. Generate 500 customers
   const customersData = generateCustomers(500, merchant.merchantId);
   await Customer.insertMany(customersData);
-  console.log(`✅ Customers: ${customersData.length}`);
 
-  // Generate payments and all related data
+  // 3. Generate payments, attempts, risk assessments, recovery actions, settlements, reconciliations, audit logs
   const {
     payments, attempts, riskAssessments,
     recoveryActions, settlements, reconciliations, auditLogs
   } = generatePaymentsAndRelated(customersData, merchant.merchantId);
 
   await Payment.insertMany(payments);
-  console.log(`✅ Payments: ${payments.length}`);
-
   await PaymentAttempt.insertMany(attempts);
-  console.log(`✅ Payment Attempts: ${attempts.length}`);
-
   await RiskAssessment.insertMany(riskAssessments);
-  console.log(`✅ Risk Assessments: ${riskAssessments.length}`);
-
   await RecoveryAction.insertMany(recoveryActions);
-  console.log(`✅ Recovery Actions: ${recoveryActions.length}`);
-
   await Settlement.insertMany(settlements);
-  console.log(`✅ Settlements: ${settlements.length}`);
-
   await Reconciliation.insertMany(reconciliations);
-  console.log(`✅ Reconciliations: ${reconciliations.length}`);
-
   await AuditLog.insertMany(auditLogs);
-  console.log(`✅ Audit Logs: ${auditLogs.length}`);
 
-  // Generate insights
+  // 4. Generate AI insights & Playbook rules
   const insightsData = generateInsights(merchant.merchantId);
   await AIInsight.insertMany(insightsData);
-  console.log(`✅ AI Insights: ${insightsData.length}`);
 
-  // Generate playbook
   const playbookData = generatePlaybook(merchant.merchantId);
   await MerchantPlaybook.insertMany(playbookData);
-  console.log(`✅ Merchant Playbook: ${playbookData.length}`);
 
-  // Summary
-  const failedCount = payments.filter(p => ['failed', 'recovery_recommended', 'at_risk', 'abandoned', 'blocked', 'review_required'].includes(p.status)).length;
-  const recoveredCount = payments.filter(p => p.status === 'recovered').length;
-  const highRiskCount = payments.filter(p => p.riskScore > 50).length;
-  const exceptionCount = reconciliations.filter(r => r.status === 'exception').length;
+  // Aggregated calculations
+  const failedCount = payments.filter(p => ['failed', 'recovery_recommended', 'blocked', 'abandoned'].includes(p.status)).length;
+  const recoverableCount = payments.filter(p => p.status === 'recovery_recommended').length;
+  const highRiskCount = payments.filter(p => p.status === 'blocked' || p.riskScore > 75).length;
+  const abandonedCount = payments.filter(p => p.status === 'abandoned').length;
 
-  console.log('\n📊 Seed Summary:');
-  console.log(`   Total payments: ${payments.length}`);
-  console.log(`   Failed/At-risk: ${failedCount}`);
-  console.log(`   Recovered: ${recoveredCount}`);
-  console.log(`   High-risk: ${highRiskCount}`);
-  console.log(`   Settlement exceptions: ${exceptionCount}`);
-  console.log(`   Payment attempts: ${attempts.length}`);
-  console.log('\n✨ Seed complete!\n');
+  const totalGMV = payments.reduce((sum, p) => sum + p.amount, 0);
+  const capturedPayments = payments.filter(p => ['captured', 'settled', 'reconciled', 'recovered'].includes(p.status));
+  const capturedVolume = capturedPayments.reduce((sum, p) => sum + p.amount, 0);
+  const recoveredPayments = payments.filter(p => p.status === 'recovered');
+  const recoveredVolume = recoveredPayments.reduce((sum, p) => sum + p.amount, 0);
+  const recoverablePayments = payments.filter(p => p.status === 'recovery_recommended');
+  const recoverableVolume = recoverablePayments.reduce((sum, p) => sum + Math.round(p.amount * (p.recoveryProbability || 0) / 100), 0);
+  const highRiskPayments = payments.filter(p => p.status === 'blocked' || p.riskScore > 75);
+  const revenueAtRisk = highRiskPayments.reduce((sum, p) => sum + p.amount, 0);
+
+  const formatLakh = (amt) => `₹${(amt / 100000).toFixed(2)}L`;
+
+  console.log('\n====================================');
+  console.log('PULSE DEMO DATABASE SEEDED');
+  console.log('====================================\n');
+  console.log(`Customers: ${customersData.length}`);
+  console.log(`Payments: ${payments.length}`);
+  console.log(`Attempts: ${attempts.length}`);
+  console.log(`Failed: ${failedCount}`);
+  console.log(`Recoverable: ${recoverableCount}`);
+  console.log(`High Risk: ${highRiskCount}`);
+  console.log(`Abandoned: ${abandonedCount}`);
+  console.log(`Settlements: ${settlements.length}`);
+  console.log(`Reconciliation: ${reconciliations.length}`);
+  console.log(`Audit Logs: ${auditLogs.length}+`);
+  console.log(`Playbook Rules: ${playbookData.length}`);
+  console.log(`Insights: ${insightsData.length}\n`);
+  console.log(`Attempted GMV: ${formatLakh(totalGMV)}`);
+  console.log(`Captured: ${formatLakh(capturedVolume)}`);
+  console.log(`Recoverable: ${formatLakh(recoverableVolume)}`);
+  console.log(`Recovered: ${formatLakh(recoveredVolume)}`);
+  console.log(`Revenue at Risk: ${formatLakh(revenueAtRisk)}`);
+  console.log('\n====================================');
+  console.log('SEED COMPLETE');
+  console.log('====================================\n');
 
   await mongoose.connection.close();
   process.exit(0);

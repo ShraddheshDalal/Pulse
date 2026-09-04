@@ -53,6 +53,6 @@ function getActionLabel(action) {
   return labels[action] || action;
 }
 
-const MERCHANT_ID = 'MERCH00001';
+const MERCHANT_ID = process.env.MERCHANT_ID || 'MERCHANT_TRENDCART_001';
 
 module.exports = { formatCurrency, formatCompactCurrency, getRiskLevel, getStatusLabel, getActionLabel, MERCHANT_ID };

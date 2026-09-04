@@ -19,7 +19,7 @@ exports.getDashboard = async (req, res, next) => {
     const capturedVolume = capturedPayments.reduce((sum, p) => sum + p.amount, 0);
 
     // Failed/recoverable
-    const failedStatuses = ['failed', 'recovery_recommended', 'at_risk', 'abandoned', 'review_required'];
+    const failedStatuses = ['failed', 'recovery_recommended', 'at_risk', 'abandoned', 'review_required', 'blocked'];
     const failedPayments = payments.filter(p => failedStatuses.includes(p.status));
     const failedVolume = failedPayments.reduce((sum, p) => sum + p.amount, 0);
 
@@ -33,12 +33,11 @@ exports.getDashboard = async (req, res, next) => {
     const recoveredPayments = payments.filter(p => p.status === 'recovered');
     const recoveredVolume = recoveredPayments.reduce((sum, p) => sum + p.amount, 0);
 
-    // Revenue at risk
-    const atRiskPayments = payments.filter(p =>
-      failedStatuses.includes(p.status) && p.recoveryProbability <= 40
+    // Revenue at risk (high risk or low recovery probability)
+    const atRiskPayments = failedPayments.filter(p =>
+      p.riskScore >= 75 || p.recoveryProbability <= 40 || p.status === 'blocked'
     );
-    const revenueAtRisk = atRiskPayments.reduce((sum, p) => sum + p.amount, 0) +
-      failedPayments.filter(p => p.riskScore >= 75).reduce((sum, p) => sum + p.amount, 0);
+    const revenueAtRisk = atRiskPayments.reduce((sum, p) => sum + p.amount, 0);
 
     // AI uplift (counterfactual)
     const baselineRecoveryRate = 0.19;
